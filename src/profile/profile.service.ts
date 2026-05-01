@@ -9,13 +9,13 @@ import {
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
-import { PrismaService } from 'src/prisma/prisma.service';
 import { FilterProfileDto } from './dto/filter-profile.dto';
 import { SearchProfileDto } from './dto/search-profile.dto';
 import { CreateProfileDto } from './dto/create-profile.dto';
 import axios from 'axios';
 import { COUNTRIES } from './utils/country.util';
 import { ExportProfileDto } from './dto/export-profile.dto';
+import { PrismaService } from '../prisma/prisma.service';
 
 const COUNTRY_CODE_TO_NAME: Record<string, string> = Object.fromEntries(
   COUNTRIES.map((c) => [c.code, c.name]),

@@ -8,16 +8,16 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ProfileService } from './profile.service';
 import { FilterProfileDto } from './dto/filter-profile.dto';
 import { SearchProfileDto } from './dto/search-profile.dto';
-import { Roles } from 'src/auth/decorators/roles.decorator';
-import { RolesGuard } from 'src/auth/guards/role.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { RolesGuard } from '../auth/guards/role.guard';
 import { CreateProfileDto } from './dto/create-profile.dto';
 import { ExportProfileDto } from './dto/export-profile.dto';
 import type { Response } from 'express';
-import { ApiVersionGuard } from 'src/common/guards/api-version.guard';
+import { ApiVersionGuard } from '../common/guards/api-version.guard';
 
 @Controller('api/profiles')
 @UseGuards(JwtAuthGuard, ApiVersionGuard)
