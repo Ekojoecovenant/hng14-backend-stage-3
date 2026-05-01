@@ -16,26 +16,20 @@ export class GithubStrategy extends PassportStrategy(Strategy, 'github') {
     super({
       clientID: configService.getOrThrow<string>('GITHUB_CLIENT_ID'),
       clientSecret: configService.getOrThrow<string>('GITHUB_CLIENT_SECRET'),
-      callbackURL: 'http://localhost:3000/auth/github/callback',
+      callbackURL: configService.getOrThrow<string>('GITHUB_CALLBACK_URL'),
       scope: ['user:email'],
     });
   }
 
   async validate(
-    accessToken: string,
-    refreshToken: string,
+    _accessToken: string,
+    _refreshToken: string,
     profile: any,
     done: (error: any, user?: any) => void,
   ): Promise<any> {
     try {
-      // console.log('GitHub Profile:', {
-      //   id: profile.id,
-      //   username: profile.username,
-      //   email: profile.emails?.[0]?.value,
-      // });
-
       const userData: GithubProfile = {
-        github_id: profile.id,
+        github_id: String(profile.id),
         username: profile.username || profile.displayName,
         email: profile.emails?.[0]?.value,
         avatar_url: profile.photos?.[0]?.value,
@@ -46,7 +40,6 @@ export class GithubStrategy extends PassportStrategy(Strategy, 'github') {
 
       done(null, savedUser);
     } catch (err) {
-      console.error('❌ Github validate error:', err);
       done(err, null);
     }
   }

@@ -7,6 +7,7 @@ import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
+  NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { FilterProfileDto } from './dto/filter-profile.dto';
@@ -25,6 +26,20 @@ const COUNTRY_ALIAS_TO_CODE: Record<string, string> = Object.fromEntries(
     c.aliases.map((alias) => [alias.toLowerCase(), c.code]),
   ),
 );
+
+// Fixed CSV column order
+const CSV_COLUMNS = [
+  'id',
+  'name',
+  'gender',
+  'gender_probability',
+  'age',
+  'age_group',
+  'country_id',
+  'country_name',
+  'country_probability',
+  'created_at',
+] as const;
 
 @Injectable()
 export class ProfileService {
@@ -47,7 +62,7 @@ export class ProfileService {
 
     const pageNum = Math.max(1, Number(page));
     const limitNum = Math.min(50, Math.max(1, Number(limit)));
-    const skip = (Number(page) - 1) * Number(limit);
+    const skip = (pageNum - 1) * limitNum;
 
     const where: any = {};
 
@@ -55,8 +70,7 @@ export class ProfileService {
     if (age_group) where.age_group = age_group.toLowerCase();
 
     if (country_id) {
-      const code = String(country_id).toUpperCase().trim();
-      where.country_id = code;
+      where.country_id = String(country_id).toUpperCase().trim();
     }
 
     // age range
@@ -75,7 +89,13 @@ export class ProfileService {
     }
 
     //sorting
-    const validSort = ['age', 'created_at', 'gender_probability'];
+    const validSort = [
+      'age',
+      'created_at',
+      'gender_probability',
+      'country_probabilty',
+      'name',
+    ];
     const sortField = validSort.includes(String(sort_by))
       ? String(sort_by)
       : 'created_at';
@@ -103,24 +123,39 @@ export class ProfileService {
       this.prisma.profile.count({ where }),
     ]);
 
+    const totalPages = Math.ceil(total / limitNum);
+
     return {
       status: 'success',
       page: pageNum,
       limit: limitNum,
       total,
-      total_pages: Math.ceil(total / limitNum),
+      total_pages: totalPages,
       links: {
-        self: `/profiles?page=${pageNum}&limit=${limitNum}`,
+        self: `/api/profiles?page=${pageNum}&limit=${limitNum}`,
         next:
-          pageNum * limitNum < total
-            ? `/profiles?page=${pageNum + 1}&limit=${limitNum}`
+          pageNum < totalPages
+            ? `/api/profiles?page=${pageNum + 1}&limit=${limitNum}`
             : null,
         prev:
           pageNum > 1
-            ? `/profiles?page=${pageNum - 1}&limit=${limitNum}`
+            ? `/api/profiles?page=${pageNum - 1}&limit=${limitNum}`
             : null,
       },
       data,
+    };
+  }
+
+  async findOne(id: string) {
+    const profile = await this.prisma.profile.findUnique({
+      where: { id },
+    });
+    if (!profile)
+      throw new NotFoundException(`Profile with id "${id}" not found`);
+
+    return {
+      status: 'success',
+      data: profile,
     };
   }
 
@@ -133,12 +168,16 @@ export class ProfileService {
     if (q.includes('female') && !q.includes('male')) where.gender = 'female';
 
     // Age group
-    if (q.includes('young')) where.age = { gte: 16, lte: 24 };
     if (q.includes('teen') || q.includes('teenager'))
       where.age_group = 'teenager';
-    if (q.includes('adult')) where.age_group = 'adult';
     if (q.includes('senior')) where.age_group = 'senior';
     if (q.includes('child')) where.age_group = 'child';
+    if (q.includes('adult')) where.age_group = 'adult';
+
+    // "young" age range
+    if (q.includes('young') && !where.age_group) {
+      where.age = { gte: 16, lte: 24 };
+    }
 
     // Age numbers
     const ageMatch = searchDto.q.match(/(\d+)/);
@@ -153,15 +192,19 @@ export class ProfileService {
     }
 
     // Country detection
-    for (const [name, code] of Object.entries(COUNTRY_ALIAS_TO_CODE)) {
-      if (q.includes(name)) {
-        where.country_id = code;
-        break;
+    let bestMatch = '';
+    for (const alias of Object.entries(COUNTRY_ALIAS_TO_CODE)) {
+      if (q.includes(alias[0])) {
+        bestMatch = alias[0];
       }
     }
 
+    if (bestMatch) {
+      where.country_id = COUNTRY_ALIAS_TO_CODE[bestMatch];
+    }
+
     if (Object.keys(where).length === 0) {
-      throw new Error('Unable to interpret query');
+      throw new BadRequestException('Unable to interpret query');
     }
 
     const page = Number(searchDto?.page) || 1;
@@ -169,7 +212,7 @@ export class ProfileService {
 
     const [data, total] = await Promise.all([
       this.prisma.profile.findMany({
-        where: { ...where },
+        where,
         orderBy: { created_at: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
@@ -177,19 +220,24 @@ export class ProfileService {
       this.prisma.profile.count({ where }),
     ]);
 
+    const totalPages = Math.ceil(total / limit);
+
     return {
       status: 'success',
       page,
       limit,
       total,
-      total_pages: Math.ceil(total / limit),
+      total_pages: totalPages,
       links: {
-        self: `/profiles?page=${page}&limit=${limit}`,
+        self: `/api/profiles/search?q=${encodeURIComponent(searchDto.q)}&page=${page}&limit=${limit}`,
         next:
-          page * limit < total
-            ? `/profiles?page=${page + 1}&limit=${limit}`
+          page < totalPages
+            ? `/api/profiles/search?q=${encodeURIComponent(searchDto.q)}&page=${page + 1}&limit=${limit}`
             : null,
-        prev: page > 1 ? `/profiles?page=${page - 1}&limit=${limit}` : null,
+        prev:
+          page > 1
+            ? `/api/profiles/search?q=${encodeURIComponent(searchDto.q)}&page=${page - 1}&limit=${limit}`
+            : null,
       },
       data,
     };
@@ -255,44 +303,60 @@ export class ProfileService {
   }
 
   async export(filter: ExportProfileDto = {}) {
-    const allData = await this.findAll({
+    const result = await this.findAll({
       ...filter,
       limit: 9999,
       page: 1,
     });
 
-    const rows = allData.data.map((p) => ({
-      id: p.id,
-      name: p.name,
-      gender: p.gender,
-      gender_probability: p.gender_probability,
-      age: p.age,
-      age_group: p.age_group,
-      country_id: p.country_id,
-      country_name: p.country_name,
-      country_probability: p.country_probability,
-      created_at: p.created_at,
-    }));
+    const header = CSV_COLUMNS.join(',');
 
-    // csv gen
-    const headers = Object.keys(rows[0] || {});
-    let csv = headers.join(',') + '\n';
+    if (result.data.length === 0) {
+      return header + '\n';
+    }
 
-    csv += rows
-      .map((row) =>
-        headers
-          .map((header) => {
-            const value = row[header];
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-            return typeof value === 'string' && value.includes(',')
-              ? `"${value}"`
-              : value;
-          })
-          .join(','),
-      )
-      .join('\n');
+    // const rows = result.data.map((p) => ({
+    // id: p.id,
+    // name: p.name,
+    // gender: p.gender,
+    // gender_probability: p.gender_probability,
+    // age: p.age,
+    // age_group: p.age_group,
+    // country_id: p.country_id,
+    // country_name: p.country_name,
+    // country_probability: p.country_probability,
+    // created_at: p.created_at,
+    // }));
 
-    return csv;
+    const rows = result.data.map((p: any) =>
+      CSV_COLUMNS.map((col) => {
+        const value = p[col];
+        if (value === null || value === undefined) return '';
+        const str = String(value);
+        return str.includes(',') || str.includes('"') || str.includes('\n')
+          ? `"${str.replace(/"/g, '""')}"`
+          : str;
+      }).join(','),
+    );
+
+    // // csv gen
+    // const headers = Object.keys(rows[0] || {});
+    // let csv = headers.join(',') + '\n';
+    // csv += rows
+    //   .map((row) =>
+    //     headers
+    //       .map((header) => {
+    //         const value = row[header];
+    //         // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+    //         return typeof value === 'string' && value.includes(',')
+    //           ? `"${value}"`
+    //           : value;
+    //       })
+    //       .join(','),
+    //   )
+    //   .join('\n');
+
+    return header + '\n' + rows.join('\n');
   }
 
   //======== HELPERS=============

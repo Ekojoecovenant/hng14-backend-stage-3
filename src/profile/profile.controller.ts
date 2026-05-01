@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Post,
   Query,
   Res,
@@ -18,7 +19,7 @@ import { ExportProfileDto } from './dto/export-profile.dto';
 import type { Response } from 'express';
 import { ApiVersionGuard } from 'src/common/guards/api-version.guard';
 
-@Controller('profiles')
+@Controller('api/profiles')
 @UseGuards(JwtAuthGuard, ApiVersionGuard)
 export class ProfileController {
   constructor(private readonly profileService: ProfileService) {}
@@ -33,24 +34,28 @@ export class ProfileController {
     return this.profileService.search(searchDto);
   }
 
+  @Get('export')
+  async export(@Query() exportDto: ExportProfileDto, @Res() res: Response) {
+    const csv = await this.profileService.export(exportDto);
+    const timestamp = new Date().toISOString().split('T')[0];
+
+    res.set({
+      'Content-Type': 'text/csv',
+      'Content-Disposition': `attachment; filename="profiles_${timestamp}.csv"`,
+    });
+
+    return res.send(csv);
+  }
+
+  @Get(':id')
+  async findOne(@Param('id') id: string) {
+    return this.profileService.findOne(id);
+  }
+
   @Post()
   @Roles('ADMIN')
   @UseGuards(RolesGuard)
   create(@Body() createProfileDto: CreateProfileDto) {
     return this.profileService.create(createProfileDto);
-  }
-
-  @Get('export')
-  @Roles('ADMIN')
-  @UseGuards(RolesGuard)
-  async export(@Query() exportDto: ExportProfileDto, @Res() res: Response) {
-    const data = await this.profileService.export(exportDto);
-
-    res.set({
-      'Content-Type': 'text/csv',
-      'Content-Disposition': `attachment; filename="profiles_${new Date().toISOString().split('T')[0]}.csv"`,
-    });
-
-    return res.send(data);
   }
 }
