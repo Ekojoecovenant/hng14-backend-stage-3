@@ -11,6 +11,7 @@ import { PrismaService } from './prisma/prisma.service';
 import { ProfileModule } from './profile/profile.module';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerMiddleware } from './common/middleware/logger.middleware';
+import { AppController } from './app.controller';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { LoggerMiddleware } from './common/middleware/logger.middleware';
     AuthModule,
     ProfileModule,
   ],
+  controllers: [AppController],
   providers: [PrismaService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
   exports: [PrismaService],
 })
