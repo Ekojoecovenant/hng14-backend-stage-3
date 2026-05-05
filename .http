@@ -1,5 +1,18 @@
-@base = http://localhost:3000/profiles
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwYzQ1MTNkZC1jNWUxLTQzNTAtOTliNi1mMWNmMDMxODliMTEiLCJnaXRodWJfaWQiOiIxNTA5NTgwMTciLCJyb2xlIjoiQURNSU4iLCJpYXQiOjE3Nzc1MDE2NjYsImV4cCI6MTc3NzUwMTg0Nn0.JB7s-X1YXYSXwxodYquyRJI2QzmDdl1LTVm2h0V5s00
+@base = http://localhost:3000/api/profiles
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwYzQ1MTNkZC1jNWUxLTQzNTAtOTliNi1mMWNmMDMxODliMTEiLCJnaXRodWJfaWQiOiIxNTA5NTgwMTciLCJyb2xlIjoiQURNSU4iLCJpYXQiOjE3NzgwMTM2NzMsImV4cCI6MTc3ODAxMzg1M30.fGtPx3Wv9otLflzMiBkSUR5TlHVH2CTPSRqFk_vSAQk
+
+### Upload Profiles 1
+POST {{base}}/ingest
+Authorization: Bearer {{token}}
+X-API-Version: 1
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="file"; filename="test_profiles.csv"
+Content-Type: text/csv
+
+< ./test_profiles.csv
+--boundary--
 
 GET {{base}}
 Authorization: Bearer {{token}}
@@ -7,19 +20,27 @@ Authorization: Bearer {{token}}
 ###
 GET {{base}}?gender=female&country_id=RW&min_gender_probability=0.5&min_country_probability=0.5
 Authorization: Bearer {{token}}
+X-API-Version: 1
+###
+GET {{base}}?country_id=RW&gender=female&min_gender_probability=0.5&min_country_probability=0.5
+Authorization: Bearer {{token}}
+X-API-Version: 1
 
 ###
 GET {{base}}/search?q=Male+and+female+teenagers+above+17&limit=50
 Authorization: Bearer {{token}}
+X-API-Version: 1
 
 
 ###
 GET {{base}}/search?q=zxqv+unparseable+term
 Authorization: Bearer {{token}}
+X-API-Version: 1
 
 ###
-GET {{base}}/search?q=females+above+30&limit=50 
+GET {{base}}/search?q=male+above+30&limit=50 
 Authorization: Bearer {{token}}
+X-API-Version: 1
 
 ###
 

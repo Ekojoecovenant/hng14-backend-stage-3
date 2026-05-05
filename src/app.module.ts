@@ -12,6 +12,7 @@ import { ProfileModule } from './profile/profile.module';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerMiddleware } from './common/middleware/logger.middleware';
 import { AppController } from './app.controller';
+import { CacheModule } from './cache/cache.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { AppController } from './app.controller';
       { name: 'default', ttl: 60000, limit: 60 },
     ]),
     ConfigModule.forRoot({ isGlobal: true }),
+    CacheModule,
     AuthModule,
     ProfileModule,
   ],

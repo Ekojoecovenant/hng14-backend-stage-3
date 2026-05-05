@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-return */
 /* eslint-disable @typescript-eslint/no-unsafe-call */
 /* eslint-disable @typescript-eslint/no-unsafe-argument */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
@@ -16,6 +17,7 @@ import axios from 'axios';
 import { COUNTRIES } from './utils/country.util';
 import { ExportProfileDto } from './dto/export-profile.dto';
 import { PrismaService } from '../prisma/prisma.service';
+import { CacheService } from '../cache/cache.service';
 
 const COUNTRY_CODE_TO_NAME: Record<string, string> = Object.fromEntries(
   COUNTRIES.map((c) => [c.code, c.name]),
@@ -43,9 +45,19 @@ const CSV_COLUMNS = [
 
 @Injectable()
 export class ProfileService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private cache: CacheService,
+  ) {}
 
   async findAll(filter: FilterProfileDto) {
+    const normalized = this.cache.normalize({ ...filter });
+    const cacheKey = this.cache.buildKey('profiles', normalized);
+
+    const cached = await this.cache.get<any>(cacheKey);
+    if (cached) return cached; // on cache hit
+
+    // on cache miss
     const {
       gender,
       age_group,
@@ -125,7 +137,7 @@ export class ProfileService {
 
     const totalPages = Math.ceil(total / limitNum);
 
-    return {
+    const result = {
       status: 'success',
       page: pageNum,
       limit: limitNum,
@@ -144,6 +156,9 @@ export class ProfileService {
       },
       data,
     };
+
+    await this.cache.set(cacheKey, result);
+    return result;
   }
 
   async findOne(id: string) {
@@ -164,8 +179,16 @@ export class ProfileService {
     const where: any = {};
 
     // Gender
-    if (q.includes('male') && !q.includes('female')) where.gender = 'male';
-    if (q.includes('female') && !q.includes('male')) where.gender = 'female';
+    if (
+      (q.includes('male') || q.includes('men')) &&
+      !(q.includes('female') || q.includes('women'))
+    )
+      where.gender = 'male';
+    if (
+      (q.includes('female') || q.includes('women')) &&
+      !(q.includes('male') || q.includes('men'))
+    )
+      where.gender = 'female';
 
     // Age group
     if (q.includes('teen') || q.includes('teenager'))
@@ -207,8 +230,14 @@ export class ProfileService {
       throw new BadRequestException('Unable to interpret query');
     }
 
-    const page = Number(searchDto?.page) || 1;
+    const page = Math.max(1, Number(searchDto?.page) || 1);
     const limit = Math.min(50, Number(searchDto?.limit) || 10);
+
+    const normalized = this.cache.normalize({ ...where, page, limit });
+    const cacheKey = this.cache.buildKey('search', normalized);
+
+    const cached = await this.cache.get<any>(cacheKey);
+    if (cached) return cached;
 
     const [data, total] = await Promise.all([
       this.prisma.profile.findMany({
@@ -222,7 +251,7 @@ export class ProfileService {
 
     const totalPages = Math.ceil(total / limit);
 
-    return {
+    const result = {
       status: 'success',
       page,
       limit,
@@ -241,6 +270,9 @@ export class ProfileService {
       },
       data,
     };
+
+    await this.cache.set(cacheKey, result);
+    return result;
   }
 
   async create(createDto: CreateProfileDto) {
@@ -285,6 +317,8 @@ export class ProfileService {
         },
       });
 
+      await this.cache.invalidateAll();
+
       return {
         status: 'success',
         data: profile,
@@ -314,19 +348,6 @@ export class ProfileService {
     if (result.data.length === 0) {
       return header + '\n';
     }
-
-    // const rows = result.data.map((p) => ({
-    // id: p.id,
-    // name: p.name,
-    // gender: p.gender,
-    // gender_probability: p.gender_probability,
-    // age: p.age,
-    // age_group: p.age_group,
-    // country_id: p.country_id,
-    // country_name: p.country_name,
-    // country_probability: p.country_probability,
-    // created_at: p.created_at,
-    // }));
 
     const rows = result.data.map((p: any) =>
       CSV_COLUMNS.map((col) => {
@@ -359,7 +380,146 @@ export class ProfileService {
     return header + '\n' + rows.join('\n');
   }
 
-  //======== HELPERS=============
+  // ingest csv for streaming
+  async ingestCsv(fileBuffer: Buffer): Promise<{
+    status: string;
+    total_rows: number;
+    inserted: number;
+    skipped: number;
+    reasons: Record<string, number>;
+  }> {
+    const { Readable } = await import('stream');
+    const csvParser = (await import('csv-parser')).default;
+
+    const CHUNK_SIZE = 1000;
+    const VALID_GENDERS = ['male', 'female'];
+    const VALID_AGE_GROUPS = ['child', 'teenager', 'adult', 'senior'];
+
+    let totalRows = 0;
+    let inserted = 0;
+    const reasons: Record<string, number> = {
+      duplicate_name: 0,
+      invalid_age: 0,
+      invalid_gender: 0,
+      invalid_age_group: 0,
+      missing_fields: 0,
+      malformed_row: 0,
+    };
+
+    // stream csv and collect valid rows
+    const validRows: any[] = [];
+
+    await new Promise<void>((resolve, reject) => {
+      const stream = Readable.from(fileBuffer);
+
+      stream
+        .pipe(csvParser())
+        .on('data', (row: Record<string, string>) => {
+          totalRows++;
+
+          try {
+            // validate name
+            const name = row['name']?.trim().toLowerCase();
+            if (!name) {
+              reasons.missing_fields++;
+              return;
+            }
+
+            // validate age
+            let age: number | null = null;
+            if (row['age'] !== undefined && row['age'] !== '') {
+              age = Number(row['age']);
+              if (isNaN(age) || age < 0 || age > 150) {
+                reasons.invalid_age++;
+                return;
+              }
+            }
+
+            //validate gender
+            let gender: string | null = null;
+            if (row['gender']) {
+              gender = row['gender'].trim().toLowerCase();
+              if (!VALID_GENDERS.includes(gender)) {
+                reasons.invalid_gender++;
+                return;
+              }
+            }
+
+            // validate age_group
+            let age_group: string | null = null;
+            if (row['age_group']) {
+              age_group = row['age_group'].trim().toLowerCase();
+              if (!VALID_AGE_GROUPS.includes(age_group)) {
+                reasons.invalid_age_group++;
+                return;
+              }
+            }
+
+            // valid rows
+            validRows.push({
+              name,
+              gender,
+              gender_probability: row['gender_probability']
+                ? Number(row['gender_probability'])
+                : null,
+              age,
+              age_group:
+                age_group ?? (age !== null ? this.getAgeGroup(age) : null),
+              country_id: row['country_id']?.trim().toUpperCase() || null,
+              country_name: row['country_name']?.trim() || null,
+              country_probability: row['country_probability']
+                ? Number(row['country_probability'])
+                : null,
+            });
+          } catch {
+            reasons.malformed_row++;
+          }
+        })
+        .on('end', () => {
+          resolve();
+        })
+        .on('error', (err) => {
+          reject(err);
+        });
+    });
+
+    // batch insert valid rows in chunks
+    for (let i = 0; i < validRows.length; i += CHUNK_SIZE) {
+      const chunk = validRows.slice(i, i + CHUNK_SIZE);
+
+      try {
+        const result = await this.prisma.profile.createMany({
+          data: chunk,
+          skipDuplicates: true,
+        });
+
+        inserted += result.count;
+
+        const duplicatesInChunk = chunk.length - result.count;
+        reasons.duplicate_name += duplicatesInChunk;
+      } catch {
+        reasons.malformed_row += chunk.length;
+      }
+    }
+
+    await this.cache.invalidateAll();
+
+    const totalSkipped = Object.values(reasons).reduce((a, b) => a + b, 0);
+
+    const nonZeroReasons = Object.fromEntries(
+      Object.entries(reasons).filter(([, v]) => v > 0),
+    );
+
+    return {
+      status: 'success',
+      total_rows: totalRows,
+      inserted,
+      skipped: totalSkipped,
+      reasons: nonZeroReasons,
+    };
+  }
+
+  //======== HELPERS============
   private async fetchAndProcessName(name: string) {
     const GENDERIZE_URL = 'https://api.genderize.io';
     const AGIFY_URL = 'https://api.agify.io';
@@ -422,7 +582,6 @@ export class ProfileService {
   private async fetchWithError<T>(url: string, apiName: string): Promise<T> {
     try {
       const response = await axios.get(url, { timeout: 5000 });
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-return
       return response.data;
     } catch {
       throw new Error(`${apiName} API request failed`);

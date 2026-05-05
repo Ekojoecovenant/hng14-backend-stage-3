@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -6,7 +7,9 @@ import {
   Post,
   Query,
   Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ProfileService } from './profile.service';
@@ -17,7 +20,9 @@ import { RolesGuard } from '../auth/guards/role.guard';
 import { CreateProfileDto } from './dto/create-profile.dto';
 import { ExportProfileDto } from './dto/export-profile.dto';
 import type { Response } from 'express';
+import 'multer';
 import { ApiVersionGuard } from '../common/guards/api-version.guard';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('api/profiles')
 @UseGuards(JwtAuthGuard, ApiVersionGuard)
@@ -57,5 +62,31 @@ export class ProfileController {
   @UseGuards(RolesGuard)
   create(@Body() createProfileDto: CreateProfileDto) {
     return this.profileService.create(createProfileDto);
+  }
+
+  @Post('ingest')
+  @Roles('ADMIN')
+  @UseGuards(RolesGuard)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: {
+        fileSize: 100 * 1024 * 1024, // 100MB
+      },
+      fileFilter: (_req, file, cb) => {
+        if (!file.originalname.match(/\.(csv)$/i)) {
+          return cb(
+            new BadRequestException('Only CSV files are allowed'),
+            false,
+          );
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  async ingest(@UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('CSV file is required');
+    }
+    return this.profileService.ingestCsv(file.buffer);
   }
 }
